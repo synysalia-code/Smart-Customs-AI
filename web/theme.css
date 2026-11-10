@@ -1,0 +1,34 @@
+/* Interface theme only. The map, SVG artwork and vehicle labels retain their colors. */
+:root{--ink:#e7efff;--muted:#a5b5d0;--teal:#67adff;--mint:#17385f;--line:#243b60;--paper:#080f21;--amber:#f1b955;--red:#ff9987;color-scheme:dark}
+body{background:radial-gradient(ellipse at 75% 0,#142a51 0,transparent 48%),#080f21;color:var(--ink)}
+header{background:#0b162b;border-bottom-color:#28446e;box-shadow:0 5px 24px #02081755}
+.brand b,.eyebrow,.brand-mark span{color:#70b4ff}.brand-mark{background:linear-gradient(145deg,#216cff,#0d3992);box-shadow:0 0 20px #176eff33}.brand-mark span{color:#bfdeff}
+.pill{background:#172b49;color:#b7d7ff;border:1px solid #31527d}.header-right{color:#a5b9d8}.live-dot{background:#54b6ff;box-shadow:0 0 0 4px #378bff15,0 0 10px #378bff44}
+h1,h2,h3{color:#eef5ff}.intro p,p,.hint,.muted{color:#a5b5d0}
+.panel,.metrics article{background:#101d35;border-color:#263e62;box-shadow:0 8px 24px #02071329}
+.metrics strong{color:#f2f7ff}.metrics article>span,.metrics small,.metrics strong small{color:#a7bad6}.mini-bar,.progress{background:#203452}.mini-bar i,.progress i{background:linear-gradient(90deg,#286bff,#53c3ff)}
+nav{border-color:#2a4267}.tab{color:#9fb2d1}.tab:hover{color:#d5e7ff;filter:none}.tab.active{color:#70b8ff;border-bottom-color:#3984ff;text-shadow:0 0 18px #318cff3d}
+.primary,.dark{background:linear-gradient(135deg,#2168f4,#1552c9);color:#fff;border-color:#4d90ff;box-shadow:0 3px 12px #1768ff25}
+.primary:hover,.dark:hover{background:linear-gradient(135deg,#347cff,#1a60e0);filter:none}
+.quiet,.map-tools button{background:#172943;color:#dbeaff;border-color:#35537c}.quiet:hover,.map-tools button:hover{background:#203b60;filter:none}
+button:focus-visible,input:focus-visible,select:focus-visible{outline-color:#78c3ff}
+button:disabled{opacity:.5;box-shadow:none}
+input,select{background:#0b172c;color:#e1edff;border-color:#365174}input:hover,select:hover{border-color:#5186bc}
+.clock{background:#142c4b;border-color:#31517b;color:#b2d9ff}
+.playback{border-color:#2c4264}.playback label,.fields label,.event-note,.map-footer{color:#a5b7d2}
+.scenario-bar{background:linear-gradient(110deg,#14294b,#11203a);border-color:#315381}.scenario-bar b{color:#d6eaff}.scenario-bar p{color:#a2bbdb}
+.operations-summary span{background:#122740;color:#bdd4ef;border-color:#458dff}.operations-summary span:last-child{border-color:#d5a255}
+.exit-overview{background:#102a46;color:#c7e3ff;border-color:#4b97ff}
+.signal{border-color:#273b58}.signal>span{color:#a6b8d2}.signal b{color:#e6effc}.signal b.alarm{color:#ffb094}
+.risk-block{background:#122b47;border:1px solid #2b4c73}.risk-block span,.risk-block small{color:#b2c8df}.risk-block strong{color:#e3f1ff}.risk-track{background:#263e5d}.risk-track i{background:linear-gradient(90deg,#2777ff,#59c6ff)}
+.recommend>span,.recommend small{color:#a9bdd7}.recommend h3,.big-number,#episode-end h3{color:#7fbdff}
+.value-row{color:#a6bad5}.value-row.selected{color:#8ac8ff}
+details{border-color:#2b4264}summary{color:#aacef6}details p{color:#a9bad0}.manual button{background:#1b3657;color:#daebff;border:1px solid #365780}
+.log-row,.scan-history-row{border-color:#263d5c;color:#c9d9ef}.log-row time{color:#92aac9}.log-row b{color:#7ab8ff}
+th{background:#172b47;color:#bbd0eb}td{border-color:#2a405e;color:#d4e3f5}tr.q-row{background:#123657}.held-row{background:#402631}.held-row td:last-child{color:#ffbcaa}
+.game-flow>div{background:#162a46;border:1px solid #2c4568}.game-flow span,dt{color:#8bc6ff}.about-grid p,.about-grid dd{color:#b3c2d8}
+#error{background:#3c2632;color:#ffd3c7;border-color:#82515a}
+footer{color:#8fa5c4;border-color:#263e62}
+.table-scroll,#logs{scrollbar-color:#42668c #112039}
+/* Explicitly isolate map rendering from the interface palette. */
+.map{color-scheme:light;color:#12312f}.map .vehicle{color:#fff}
