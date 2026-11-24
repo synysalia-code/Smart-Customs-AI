@@ -1,0 +1,75 @@
+{
+  "config": {
+    "prior": 0.04,
+    "arrival_gap": 4.0,
+    "trucks": 80,
+    "primary_tpr": 0.92,
+    "primary_fpr": 0.08,
+    "document_tpr": 0.55,
+    "document_fpr": 0.12,
+    "scan_tpr": 0.97,
+    "scan_fpr": 0.04,
+    "scan_time": 3.0,
+    "deep_time": 7.0
+  },
+  "episodes": 40,
+  "seeds": [
+    900000,
+    900039
+  ],
+  "policies": {
+    "rule": {
+      "completed": 3200,
+      "detected": 122,
+      "missed": 10,
+      "recall": 0.9242424242424242,
+      "legal_deep": 258,
+      "scanned": 0,
+      "avg_time": 1.814900349246157,
+      "avg_wait": 0.10240034924615711,
+      "reward_per_truck": 13.743946875,
+      "reward_ci95": 0.8043914402264283,
+      "q_coverage": 1.0
+    },
+    "utility": {
+      "completed": 3200,
+      "detected": 119,
+      "missed": 13,
+      "recall": 0.9015151515151515,
+      "legal_deep": 46,
+      "scanned": 276,
+      "avg_time": 1.5871550481680814,
+      "avg_wait": 0.019030048168081463,
+      "reward_per_truck": 14.0769375,
+      "reward_ci95": 0.8882874645044818,
+      "q_coverage": 1.0
+    },
+    "q": {
+      "completed": 3200,
+      "detected": 122,
+      "missed": 10,
+      "recall": 0.9242424242424242,
+      "legal_deep": 226,
+      "scanned": 69,
+      "avg_time": 1.7493801437731946,
+      "avg_wait": 0.032192643773194723,
+      "reward_per_truck": 13.89030625,
+      "reward_ci95": 0.7980814826568814,
+      "q_coverage": 1.0
+    },
+    "all": {
+      "completed": 3200,
+      "detected": 132,
+      "missed": 0,
+      "recall": 1.0,
+      "legal_deep": 3068,
+      "scanned": 0,
+      "avg_time": 126.52043010567168,
+      "avg_wait": 119.52043010567168,
+      "reward_per_truck": -241.379603125,
+      "reward_ci95": 9.381729784833913,
+      "q_coverage": 1.0
+    }
+  },
+  "note": "Бірдей тәуелсіз ағындар. Сенімділік аралығы — эпизодтар бойынша жуық 95%. Нақты кеден деректері емес."
+}
