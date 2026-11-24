@@ -97,6 +97,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(dict(simulation=ENV.public_state(), policy=POLICY, benchmark=BENCHMARK))
         files = {"/": ("index.html", "text/html; charset=utf-8"),
                  "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                 "/routing.js": ("routing.js", "text/javascript; charset=utf-8"),
                  "/style.css": ("style.css", "text/css; charset=utf-8")}
         if parsed.path in files:
             name, mime = files[parsed.path]

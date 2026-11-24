@@ -4,6 +4,7 @@ const labels = {PASS:"Өткізу",SCAN:"Қосымша сканерлеу",DEE
 const policyNames = {utility:"Байес + пайдалық",rule:"Ережелік агент",q:"Q-learning",all:"Барлығын тексеру"};
 let state, playing=false, timer=null, busy=false, vehicleNodes=new Map(), lastCurve="";
 let motionUntil=0;
+let exitRoute = planExitRoute();
 const fmt=(x,d=1)=>x==null?"—":Number(x).toLocaleString("kk-KZ",{minimumFractionDigits:d,maximumFractionDigits:d});
 function message(text){$("error").textContent=text;$("error").hidden=!text;}
 async function api(path,data){
@@ -12,40 +13,141 @@ async function api(path,data){
   if(!response.ok)throw Error(body.error||"Сұрау орындалмады.");
   return body;
 }
-function pause(){playing=false;clearTimeout(timer);$("play").textContent="▶ Іске қосу";}
+const manualButtons = [...document.querySelectorAll("[data-action]")];
+
+function animationPending(){
+  return [...vehicleNodes.values()].some(node => node._reservation || node._detentionStage === "blocked");
+}
+
+function refreshControls(){
+  const inProgress = Boolean(state?.current) && !state.done;
+  const moving = inProgress && animationPending();
+  const usesQ = state?.policy === "q";
+  const needsModel = usesQ && !state.model.available;
+  const training = ["training", "evaluating"].includes(state?.job.state);
+  const prepare = $("prepare-q");
+  prepare.hidden = !needsModel;
+  prepare.disabled = busy || training;
+  prepare.textContent = training ? "Q-learning оқытылып жатыр…" : "Q-learning моделін оқыту";
+
+  const play = $("play");
+  play.disabled = !inProgress || (busy && !playing);
+  play.textContent = playing ? "Ⅱ Кідірту"
+    : needsModel ? "▶ Байеспен бастау"
+    : usesQ ? "▶ Q-learning іске қосу" : "▶ Автоматты бастау";
+  $("finish").disabled = !inProgress || busy;
+  $("new-episode").disabled = !state?.done || busy;
+  $("reset").disabled = $("dense-demo").disabled = !state || busy;
+  $("step").disabled = !inProgress || busy || moving;
+  for(const button of manualButtons){
+    const action = button.dataset.action;
+    button.disabled = !inProgress || busy || moving || (action === "SCAN" && state?.current?.scan != null);
+  }
+  const runState = $("run-state");
+  const runLabel = !state ? "Жүктелуде…" : state.done ? "Аяқталды" : playing ? "Автоматты режим" : "Үзіліс";
+  if(runState.textContent !== runLabel) runState.textContent = runLabel;
+  runState.classList.toggle("running", playing && inProgress);
+
+  const status = $("decision-status");
+  const nextStatus = !state ? "Симуляция жүктеліп жатыр…"
+    : busy ? "Шешім орындалып жатыр…"
+    : moving ? "Көлік қозғалып жатыр. Келесі шешім сәлден соң қолжетімді."
+    : playing ? "Автоматты режим қосулы."
+    : "Автоматты режим тоқтап тұр. Жалғастыру үшін карта үстіндегі іске қосу түймесін басыңыз.";
+  if(status.textContent !== nextStatus) status.textContent = nextStatus;
+}
+
+function pause(){
+  playing = false;
+  clearTimeout(timer);
+  refreshControls();
+}
+
 async function mutate(path,data={}){
-  if(busy)return;
-  if(path==="/api/step" && [...vehicleNodes.values()].some(n=>n._reservation||(n._detentionStage==="blocked")))return;
+  if(busy || (path === "/api/step" && animationPending())) return;
   busy=true;
+  refreshControls();
   try{message("");state=await api(path,data);render();}
   catch(e){pause();message(e.message||"Сервермен байланыс үзілді.");}
-  finally{busy=false;}
+  finally{busy=false;refreshControls();}
 }
 async function tick(){
   if(!playing)return;
-  if([...vehicleNodes.values()].some(n=>n._reservation||(n._detentionStage==="blocked"))){timer=setTimeout(tick,100);return;}
+  if(animationPending()){timer=setTimeout(tick,100);return;}
   await mutate("/api/step");
   if(playing&&!state.done)timer=setTimeout(tick,Math.max(Number($("speed").value),motionUntil-performance.now()+180));
   else pause();
 }
-$("play").onclick=()=>{if(playing)return pause();playing=true;$("play").textContent="Ⅱ Кідірту";tick();};
+$("play").onclick=()=>{
+  if(playing) return pause();
+  playing = true;
+  refreshControls();
+  tick();
+};
 $("step").onclick=()=>{pause();mutate("/api/step");};
 $("finish").onclick=()=>{pause();mutate("/api/finish");};
-$("reset").onclick=()=>{
+function startEpisode(parameters){
+  if(busy) return;
   pause();
-  const inputs=["prior","gap","trucks","seed"].map($);
-  if(!inputs.every(i=>i.reportValidity()))return;
-  vehicleNodes.forEach(n=>{cancelAnimationFrame(n._frame);n.remove();});vehicleNodes.clear();motionUntil=0;resetExitControl();
-  mutate("/api/reset",{policy:$("policy").value,prior:Number($("prior").value)/100,arrival_gap:Number($("gap").value),trucks:Number($("trucks").value),seed:Number($("seed").value)});
+  for(const node of vehicleNodes.values()){
+    cancelAnimationFrame(node._frame);
+    node.remove();
+  }
+  vehicleNodes.clear();
+  motionUntil = 0;
+  resetExitControl();
+  return mutate("/api/reset", parameters);
+}
+
+function populateSettings(){
+  $("policy").value = state.policy;
+  $("prior").value = state.config.prior * 100;
+  $("gap").value = state.config.arrival_gap;
+  $("trucks").value = state.config.trucks;
+  $("seed").value = state.seed;
+}
+
+$("reset").onclick=()=>{
+  const inputs = ["prior", "gap", "trucks", "seed"].map($);
+  if(!inputs.every(input => input.reportValidity())) return;
+  startEpisode({
+    policy: $("policy").value,
+    prior: Number($("prior").value) / 100,
+    arrival_gap: Number($("gap").value),
+    trucks: Number($("trucks").value),
+    seed: Number($("seed").value)
+  });
 };
-document.querySelectorAll("[data-action]").forEach(button=>button.onclick=()=>{pause();mutate("/api/step",{action:button.dataset.action});});
-document.querySelectorAll(".tab").forEach(button=>button.onclick=()=>{
-  document.querySelectorAll(".tab,.page").forEach(n=>n.classList.remove("active"));
-  button.classList.add("active");$(button.dataset.tab).classList.add("active");
+$("new-episode").onclick=()=>{
+  if(!state?.done || busy) return;
+  populateSettings();
+  startEpisode({
+    policy: state.policy,
+    prior: state.config.prior,
+    arrival_gap: state.config.arrival_gap,
+    trucks: state.config.trucks,
+    seed: state.seed
+  });
+};
+$("open-settings").addEventListener("click", () => { $("simulation-settings").open = true; });
+manualButtons.forEach(button=>button.onclick=()=>{pause();mutate("/api/step",{action:button.dataset.action});});
+const navigation = [...document.querySelectorAll(".tab")];
+navigation.forEach(button=>button.onclick=()=>{
+  for(const tab of navigation){
+    const active = tab === button;
+    tab.classList.toggle("active", active);
+    $(tab.dataset.tab).classList.toggle("active", active);
+    if(active) tab.setAttribute("aria-current", "page");
+    else tab.removeAttribute("aria-current");
+  }
   if(button.dataset.tab==="strategy")loadGame();
   if(button.dataset.tab==="terminal")requestAnimationFrame(drawVehicles);
 });
-$("train").onclick=()=>{pause();mutate("/api/train");};
+function trainCurrentModel(){
+  pause();
+  return mutate("/api/train");
+}
+$("train").onclick = $("prepare-q").onclick = trainCurrentModel;
 $("export").onclick=async()=>{
   try{const data=await api("/api/export");const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=`Smart_Customs_AI_esep_${data.simulation.seed}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){message(e.message);}
 };
@@ -56,7 +158,16 @@ function render(){
   $("completion-bar").style.width=`${100*m.completed/s.config.trucks}%`;
   $("detected").textContent=m.detected;$("wait").innerHTML=`${fmt(m.avg_wait)} <small>мин</small>`;
   $("missed").textContent=m.missed??"—";$("sim-time").textContent=fmt(s.time);
-  $("play").disabled=$("step").disabled=$("finish").disabled=s.done;
+  let policyStatus = `Агент · ${policyNames[s.policy]}`;
+  if(s.policy === "q"){
+    if(s.job.state === "training") policyStatus = `Q-learning · оқыту ${s.job.progress} / ${s.job.total}`;
+    else if(s.job.state === "evaluating") policyStatus = "Q-learning · модель бағаланып жатыр";
+    else if(!s.model.available) policyStatus = "Q-learning · осы параметрлерге модельді оқыту қажет";
+    else if(s.source === "fallback") policyStatus = "Q-learning · осы күйге Байес қолданылады";
+    else policyStatus = "Q-learning · модель дайын";
+  }
+  const policyLabel = $("active-policy");
+  if(policyLabel.textContent !== policyStatus) policyLabel.textContent = policyStatus;
   $("observation").hidden=s.done;$("episode-end").hidden=!s.done;
   if(s.done){pause();$("truck-title").textContent="Қорытынды";$("cargo").textContent="АЯҚТАЛДЫ";$("end-summary").textContent=`${m.completed} көлік өңделді. Анықтау үлесі: ${m.recall===null?"бұзушылық жоқ":fmt(m.recall*100)+"%"}. Орташа толық уақыт: ${fmt(m.avg_time)} минут. Сыйақы: ${fmt(m.reward)}.`;}
   if(o){
@@ -64,7 +175,7 @@ function render(){
     $("truck-title").textContent=`Көлік №${String(o.truck_id).padStart(3,"0")}`;$("cargo").textContent=truck.cargo;
     setSignal("primary-signal",o.primary,"Дабыл","Қалыпты");setSignal("document-signal",o.document,"Сәйкессіздік","Сәйкес");setSignal("scan-signal",o.scan,"Дабыл","Қалыпты");
     $("risk").textContent=fmt(o.posterior*100,2)+"%";$("risk-bar").style.width=(o.posterior*100)+"%";
-    $("risk-detail").textContent=`Бастапқы ${fmt(s.config.prior*100)}% → датчик + құжат${o.scan!==null?" + қосымша сканер":""}. Жүктің нақты құрамы агентке белгісіз.`;
+    $("risk-detail").textContent=`Бастапқы тәуекел ${fmt(s.config.prior*100)}%. Датчик, құжат${o.scan!==null?" және сканер":""} ескерілді.`;
     $("recommendation").textContent=labels[s.recommendation];
     const reasons={utility:"Күтілетін сыйақы, тексеру құны және бекет кезегі салыстырылды.",q:"Әрекет оқытылған Q-кестедегі ең жоғары мәнмен таңдалды.",fallback:"Бұл күйге дайын Q-мән жоқ. Байес + пайдалық тәсілі қолданылды.",rule:"Қарапайым ереже: алғашқы дабыл болса — толық тексеру.",all:"Әр көлік толық тексеруге жіберіледі."};
     $("reason").textContent=reasons[s.source];
@@ -74,7 +185,6 @@ function render(){
       const row=document.createElement("div");row.className="value-row"+(action===s.recommendation?" selected":"");
       const name=document.createElement("span"),value=document.createElement("span");name.textContent=labels[action];value.textContent=fmt(values?.[action],2);row.append(name,value);$("values").append(row);
     }
-    document.querySelector('[data-action="SCAN"]').disabled=o.scan!==null;
   }
   $("model-notice").textContent=s.model.available?`Q-модель дайын: ${s.model.episodes} эпизод, ${s.model.states} күй. Параметр өзгерсе, қайта оқыту қажет.`:"Осы параметрлерге сәйкес Q-модель жоқ. Q режимінде оқытуға дейін Байес + пайдалық тәсілі қолданылады.";
   $("logs").replaceChildren();
@@ -97,7 +207,7 @@ function detentionBay(index){
 }
 function drawVehicles(){
   if(!state)return;
-  if(!$("terminal-scene")){buildTerminalMap();enhanceTerminalDetails();finishYardMaterials();installFleetArtwork();addExitControl();expandTerminalGrounds();buildDetentionYard();installObjectTargets();startLiveYard();}
+  if(!$("terminal-scene")){buildTerminalMap();enhanceTerminalDetails();finishYardMaterials();installFleetArtwork();addExitControl();expandTerminalGrounds();buildDetentionYard();installObjectTargets();installExitRouting();startLiveYard();}
   // Restoring an already processed episode is a snapshot, not a replay from the entrance.
   const confirmed=state.trucks.filter(t=>t.status==="detected").sort((a,b)=>a.finish-b.finish||a.id-b.id);
   const detained=confirmed.slice(0,detentionCapacity);
@@ -150,6 +260,7 @@ function drawVehicles(){
   $('held-yard-count').textContent=confirmed.length>detentionCapacity ? heldLabel+` · Картадан тыс: ${confirmed.length-detentionCapacity}` : heldLabel;
   const hidden=Math.max(0,scans.length-laneCapacity)+Math.max(0,deeps.length-laneCapacity)+Math.max(0,active.filter(t=>t.status==="leaving").length-1);
   $("overflow").textContent=hidden?`Қосымша кезек: ${hidden} көлік · бекеттердегі санға енгізілген`:"Әр белгі — нақты симуляциядағы көлік";
+  refreshControls();
 }
 // Each leg follows a paved lane. Rounded corners supply continuous steering.
 function roadRoute(from,to){
@@ -182,6 +293,37 @@ function roundedRoad(points){
   }
   const end=points.at(-1);return d+` L${end.x},${end.y}`;
 }
+function installExitRouting(){
+  const panel = document.createElement("div");
+  panel.className = "exit-routing";
+  panel.innerHTML = `<label for="exit-road-condition"><strong>A* · Шығу бағыты</strong></label>
+    <select id="exit-road-condition">
+      <option value="open">Тікелей жол ашық</option>
+      <option value="delayed">Тікелей жолда кідіріс (+3 мин)</option>
+      <option value="closed">Тікелей жол жабық</option>
+    </select>
+    <output id="exit-route-stats" for="exit-road-condition" aria-live="polite"></output>`;
+  $("map").before(panel);
+
+  const svg = document.querySelector(".site-map");
+  svg.insertAdjacentHTML("beforeend", `<g class="exit-route-overlay" aria-hidden="true">
+    <path id="exit-road-closed" hidden/><path id="exit-route-line"/>
+  </g>`);
+  const condition = $("exit-road-condition");
+  function updateRoute(){
+    exitRoute = planExitRoute(condition.value);
+    $("exit-route-line").setAttribute("d", roundedRoad(exitRoute.points));
+    const closed = $("exit-road-closed");
+    closed.toggleAttribute("hidden", !exitRoute.blockedSegment);
+    if(exitRoute.blockedSegment) closed.setAttribute("d", roundedRoad(exitRoute.blockedSegment));
+    else closed.removeAttribute("d");
+    const kind = exitRoute.points.some(point => point.y > 340) ? "Айналма жол" : "Тікелей жол";
+    $("exit-route-stats").textContent = `${kind} · ${fmt(exitRoute.minutes, 2)} шартты мин · қаралған түйіндер: ${exitRoute.visited}`;
+  }
+  condition.addEventListener("change", updateRoute);
+  updateRoute();
+}
+
 // Vehicle footprint in map units, including mirrors and a safety clearance.
 function trafficOverlap(a,b){
   for(const angle of [a.angle,a.angle+Math.PI/2,b.angle,b.angle+Math.PI/2]){
@@ -216,14 +358,22 @@ function moveTruck(node,target,onComplete){
   }
   node._target=target;node._queued=null;
   const from=node._position||{x:-1620,y:340};
+  const exitDispatch = Math.hypot(from.x - 250, from.y - 340) < 1
+    && target.x === 1700 && target.y === 340 && node.matches(".leaving,.released");
   const path=document.createElementNS("http://www.w3.org/2000/svg","path");
-  path.setAttribute("d",roundedRoad(roadRoute(from,target)));
-  const length=path.getTotalLength(),samples=[];
-  for(let d=0;d<length;d+=10)samples.push(trafficPose(path,d,length));
-  samples.push(trafficPose(path,length,length));
-  const speed={1500:155,800:225,250:360}[$("speed").value]||225;
+  const speed={1500:155,800:225,250:720}[$("speed").value]||225;
   const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const duration=reduced?0:Math.max(450,length/speed*1000);
+  let plannedExit, length, samples, duration;
+  function setPath(){
+    plannedExit = exitDispatch ? exitRoute : null;
+    path.setAttribute("d", roundedRoad(plannedExit?.points ?? roadRoute(from, target)));
+    length = path.getTotalLength();
+    samples = [];
+    for(let d=0;d<length;d+=10)samples.push(trafficPose(path,d,length));
+    samples.push(trafficPose(path,length,length));
+    duration = reduced ? 0 : Math.max(450, length / speed * 1000);
+  }
+  setPath();
   let start=null,lastCheck=-Infinity;
   node._moving=true;
   if(!node._visible)node.style.visibility='hidden';
@@ -232,12 +382,15 @@ function moveTruck(node,target,onComplete){
     if(start===null){
       if(now-lastCheck<80){node._frame=requestAnimationFrame(frame);return;}
       lastCheck=now;
+      // Routes already reserved are finished before new road conditions apply.
+      if(exitDispatch && plannedExit !== exitRoute) setPath();
       if(!trafficPathFree(node,samples)){
         node.classList.add('traffic-wait');node.dataset.traffic='Жол босауын күтуде';
         node._frame=requestAnimationFrame(frame);return;
       }
       // Reserve the whole conflicting road section before entering it.
       node._reservation=samples;node._visible=true;node.style.visibility='';
+      refreshControls();
       node.classList.remove('traffic-wait');delete node.dataset.traffic;
       start=now;motionUntil=Math.max(motionUntil,now+duration);
     }
@@ -255,6 +408,7 @@ function moveTruck(node,target,onComplete){
       const next=node._queued;node._queued=null;
       if(onComplete)onComplete();
       if(next&&node.isConnected)moveTruck(node,next.target,next.onComplete);
+      refreshControls();
     }
   }
   node._frame=requestAnimationFrame(frame);
@@ -324,8 +478,26 @@ function enhanceTerminalDetails(){
  // Small walking staff remain on the pedestrian strip.
  for(let i=0;i<8;i++)d+=`<g class="yard-person" style="animation-delay:-${i*1.2}s" transform="translate(${420+i*95} 258)"><ellipse cx="3" cy="4" rx="6" ry="9" fill="#294a3d26"/><circle cy="-6" r="3.5" fill="#d5ab84"/><rect x="-4" y="-2" width="8" height="10" rx="2" fill="${i%2?'#d9a34a':'#527d91'}"/><path d="M-2 8v5M2 8v5" stroke="#314752" stroke-width="2"/><path d="M-3 1h6" stroke="#f5edbd"/></g>`;
  group.innerHTML=d;svg.append(group);
- const controls=document.createElement('div');controls.className='map-tools';controls.innerHTML='<button type="button" id="map-zoom-in" aria-label="Картаны үлкейту">＋</button><button type="button" id="map-zoom-out" aria-label="Картаны кішірейту">−</button><button type="button" id="map-zoom-reset">Толық карта</button>';
- controls.insertAdjacentHTML('afterbegin','<output id="reserve-count" aria-live="off"></output><button type="button" id="west-view">Батыс резерві</button><button type="button" id="post-view">Тексеру бекеттері</button><button type="button" id="held-view">Ұсталған көліктер</button><button type="button" id="fleet-view">Көлікті 3D көру</button><button type="button" id="interior-view">Корпустың іші</button>');
+ const controls = document.createElement("div");
+ controls.className = "map-tools";
+ controls.innerHTML = `<div class="map-tools-row">
+   <button type="button" id="map-zoom-reset">Толық карта</button>
+   <div class="map-zoom" role="group" aria-label="Карта масштабы">
+     <button type="button" id="map-zoom-out" aria-label="Картаны кішірейту">−</button>
+     <button type="button" id="map-zoom-in" aria-label="Картаны үлкейту">+</button>
+   </div>
+ </div>
+ <details class="map-views">
+   <summary>Көріністер мен нысандар</summary>
+   <div class="map-view-options">
+     <output id="reserve-count" aria-live="off"></output>
+     <button type="button" id="west-view">Батыс резерві</button>
+     <button type="button" id="post-view">Тексеру бекеттері</button>
+     <button type="button" id="held-view">Ұсталған көліктер</button>
+     <button type="button" id="fleet-view">Көлікті 3D көру</button>
+     <button type="button" id="interior-view">Корпустың іші</button>
+   </div>
+ </details>`;
  $('map').before(controls);
  const viewport=$('map'),scene=$('terminal-scene');
  let zoom=1;
@@ -349,7 +521,7 @@ function enhanceTerminalDetails(){
  $('map-zoom-in').onclick=()=>zoomAroundCenter(1.35);
  $('map-zoom-out').onclick=()=>zoomAroundCenter(1/1.35);
  $('map-zoom-reset').onclick=()=>setView(1,20,725);
- $('west-view').click();
+ $('map-zoom-reset').click();
 }
 
 function buildTerminalMap(){
@@ -396,7 +568,12 @@ function renderLearning(){
   const s=state,job=s.job;$("trained-states").textContent=s.model.states;
   const running=["training","evaluating"].includes(job.state);$("train").disabled=running;
   $("train-progress").style.width=(job.state==="idle"?(s.model.episodes?100:0):100*job.progress/job.total)+"%";
-  $("train-status").textContent=job.state==="training"?`Оқыту: ${job.progress} / ${job.total} эпизод`:job.state==="evaluating"?"Тәуелсіз ағындарда бағалау…":job.state==="failed"?job.error:s.model.episodes?`${s.model.episodes} эпизодпен оқытылған модель дайын`:"Оқыту әлі жүргізілмеді";
+  const status = s.model.available ? `${s.model.episodes} эпизодпен оқытылған модель дайын`
+    : s.model.episodes ? "Сақталған модель басқа параметрлерге арналған. Қайта оқыту қажет."
+    : "Оқыту әлі жүргізілмеді";
+  $("train-status").textContent = job.state === "training" ? `${job.progress} / ${job.total} эпизод оқытылды`
+    : job.state === "evaluating" ? "Тәуелсіз ағындарда бағалау…"
+    : job.state === "failed" ? job.error : status;
   const curve=s.model.curve,key=JSON.stringify(curve);
   if(key!==lastCurve){lastCurve=key;drawCurve(curve);}
   const b=s.benchmark;$("benchmark").replaceChildren();
@@ -413,9 +590,9 @@ function drawCurve(data){
   if(!data.length){$("curve").textContent="Оқыту нәтижесі осында көрсетіледі.";return;}
   const ns="http://www.w3.org/2000/svg",svg=document.createElementNS(ns,"svg");svg.setAttribute("viewBox","0 0 640 190");svg.setAttribute("role","img");svg.setAttribute("aria-label","Q-learning оқыту сыйақысының графигі");
   const low=Math.min(...data.map(p=>p.reward)),high=Math.max(...data.map(p=>p.reward));
-  for(let i=0;i<4;i++){const y=20+i*45,line=document.createElementNS(ns,"line"),text=document.createElementNS(ns,"text");for(const [k,v]of Object.entries({x1:50,x2:625,y1:y,y2:y,stroke:"#e4ebdf"}))line.setAttribute(k,v);text.setAttribute("x","0");text.setAttribute("y",y+4);text.setAttribute("fill","#7b8c7b");text.setAttribute("font-size","10");text.textContent=fmt(high-i*(high-low)/3,0);svg.append(line,text);}
-  const poly=document.createElementNS(ns,"polyline");poly.setAttribute("points",data.map((p,i)=>`${50+i*575/Math.max(1,data.length-1)},${155-(p.reward-low)*135/Math.max(1,high-low)}`).join(" "));poly.setAttribute("fill","none");poly.setAttribute("stroke","#087e78");poly.setAttribute("stroke-width","2.5");svg.append(poly);
-  for(const [x,text]of [[50,"20 эпизод"],[540,`${data.at(-1).episode} эпизод`]]){const t=document.createElementNS(ns,"text");t.setAttribute("x",x);t.setAttribute("y",182);t.setAttribute("font-size",10);t.setAttribute("fill","#7b8c7b");t.textContent=text;svg.append(t);}
+  for(let i=0;i<4;i++){const y=20+i*45,line=document.createElementNS(ns,"line"),text=document.createElementNS(ns,"text");for(const [k,v]of Object.entries({x1:50,x2:625,y1:y,y2:y,stroke:"#e7e4e1"}))line.setAttribute(k,v);text.setAttribute("x","0");text.setAttribute("y",y+4);text.setAttribute("fill","#5e5955");text.setAttribute("font-size","10");text.textContent=fmt(high-i*(high-low)/3,0);svg.append(line,text);}
+  const poly=document.createElementNS(ns,"polyline");poly.setAttribute("points",data.map((p,i)=>`${50+i*575/Math.max(1,data.length-1)},${155-(p.reward-low)*135/Math.max(1,high-low)}`).join(" "));poly.setAttribute("fill","none");poly.setAttribute("stroke","#c4460c");poly.setAttribute("stroke-width","2.5");svg.append(poly);
+  for(const [x,text]of [[50,"20 эпизод"],[540,`${data.at(-1).episode} эпизод`]]){const t=document.createElementNS(ns,"text");t.setAttribute("x",x);t.setAttribute("y",182);t.setAttribute("font-size",10);t.setAttribute("fill","#5e5955");t.textContent=text;svg.append(t);}
   $("curve").replaceChildren(svg);
 }
 async function loadGame(){
@@ -429,7 +606,7 @@ async function loadGame(){
 $("game-risk").onchange=loadGame;
 window.addEventListener("resize",drawVehicles);
 async function poll(){try{if(!busy&&!playing){const before=state;const latest=await api("/api/state");if(before===state&&!busy&&!playing&&JSON.stringify(latest)!==JSON.stringify(state)){state=latest;render();}}}catch(e){pause();message("Жергілікті сервермен байланыс үзілді. Қосымшаны қайта іске қосыңыз.");}finally{setTimeout(poll,2500);}}
-async function init(){try{state=await api("/api/state");$("policy").value=state.policy;$("prior").value=state.config.prior*100;$("gap").value=state.config.arrival_gap;$("trucks").value=state.config.trucks;$("seed").value=state.seed;render();setTimeout(poll,2500);}catch(e){message(e.message);}}
+async function init(){try{state=await api("/api/state");populateSettings();render();setTimeout(poll,2500);}catch(e){message(e.message);}}
 function renderScannerSummary(){
  const scanned=state.trucks.filter(t=>t.scan!==null), alarms=scanned.filter(t=>t.scan===true);
  const confirmed=alarms.filter(t=>t.status==='detected');
@@ -528,6 +705,7 @@ function runExitTask(){
    if(generation!==exitGeneration)return;
    if(!node.isConnected){exitWorking=false;runExitTask();return;}
    node._detentionStage='parking';
+   refreshControls();
    moveTruck(node,node._detentionTarget,()=>{
     if(generation!==exitGeneration)return;
     node._detentionStage='parked';node._gatePending=false;
@@ -559,6 +737,7 @@ function renderExitReport(){
  }
 }
 
+refreshControls();
 init();
 function expandTerminalGrounds(){
   const svg=document.querySelector('.site-map');
@@ -840,7 +1019,7 @@ function installObjectTargets(){
   select.add(new Option('Нысанды 3D көру…',''));
   for(const [key,label] of objects)select.add(new Option(label,key));
   select.onchange=()=>{const key=select.value;select.value='';if(key)showSiteObject(key);};
-  document.querySelector('.map-tools').append(select);
+  document.querySelector('.map-view-options').append(select);
 }
 function startLiveYard(){
   const toolbar=document.querySelector('.map-tools'),map=$('map');
@@ -853,6 +1032,33 @@ function startLiveYard(){
   renderer.domElement.setAttribute('aria-label','Терминал. Көлікті таңдап бақылауға болады.');
   host.prepend(renderer.domElement);
   const scene=new THREE.Scene();scene.background=new THREE.Color(0xb4cad4);scene.fog=new THREE.FogExp2(0xc8d6d4,.00013);
+  const routeMaterial = new THREE.MeshBasicMaterial({color:0x76fbef, side:THREE.DoubleSide});
+  const closedMaterial = new THREE.MeshBasicMaterial({color:0xff8074, side:THREE.DoubleSide});
+  const routeMesh = new THREE.Mesh(new THREE.BufferGeometry(), routeMaterial);
+  const closedMesh = new THREE.Mesh(new THREE.BufferGeometry(), closedMaterial);
+  scene.add(routeMesh, closedMesh);
+  let drawnExitRoute;
+
+  function setRouteMesh(mesh, path, width, dashed = false){
+    mesh.geometry.dispose();
+    const geometry = new THREE.BufferGeometry();
+    const vertices = [];
+    const length = path.hasAttribute("d") ? path.getTotalLength() : 0;
+    for(let start=0; start<length; start+=18){
+      if(dashed && Math.floor(start/18)%3 === 2) continue;
+      const a = path.getPointAtLength(start);
+      const b = path.getPointAtLength(Math.min(start+18, length));
+      const scale = width / Math.hypot(b.x-a.x, b.y-a.y);
+      if(!Number.isFinite(scale)) continue;
+      const dx = (b.y-a.y)*scale, dz = (a.x-b.x)*scale;
+      vertices.push(a.x+dx,3,a.y+dz, a.x-dx,3,a.y-dz, b.x+dx,3,b.y+dz,
+                    b.x+dx,3,b.y+dz, a.x-dx,3,a.y-dz, b.x-dx,3,b.y-dz);
+    }
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices,3));
+    mesh.geometry = geometry;
+    mesh.visible = vertices.length > 0;
+  }
+
   const camera=new THREE.PerspectiveCamera(42,1,1,18000);
   renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
   scene.add(new THREE.HemisphereLight(0xfff8e7,0x8a9a9e,1.9));
@@ -1036,6 +1242,10 @@ function startLiveYard(){
   const center=new THREE.Vector3(20,0,750),goal=center.clone();
   const label=$('yard-focus'),insideTools=host.querySelector('.yard-inside');
   function focus(key,x,z,d,title){mode=key;watch=null;goal.set(x,key==='room'?20:0,z);targetRange=d;label.textContent=title;insideTools.hidden=!['room','building'].includes(key);roof.visible=insideTools.hidden;dirty=true;}
+  function overview(title = 'Жалпы көрініс'){
+    pitch=1.02;yaw=.04;
+    focus('overview',20,725,Math.max(3000,4900/camera.aspect),title);
+  }
   function follow(id){
     const n=vehicleNodes.get(id);if(!n?._position)return;
     focus('truck',n._position.x,n._position.y,190,n.title);watch=id;pitch=.44;
@@ -1049,10 +1259,8 @@ function startLiveYard(){
   for(const [title,x] of [['Диспетчер бөлмесі',-158],['Құжат тексеру',34],['Айғақтар қоймасы',225]]){
     const b=document.createElement('button');b.textContent=title;b.onclick=()=>{focus('room',x,1320,185,title);pitch=.70;};insideTools.append(b);
   }
-  const movement=document.createElement('div');movement.className='yard-playback';
-  movement.innerHTML='<button type="button" id="yard-play"></button><button type="button" id="yard-step">Бір шешім →</button>';
-  host.append(movement);$('yard-play').onclick=()=>$('play').click();$('yard-step').onclick=()=>$('step').click();
-  const modeButton=document.createElement('button');modeButton.type='button';modeButton.id='yard-mode';modeButton.textContent='2D карта';toolbar.prepend(modeButton);
+  const modeButton=document.createElement('button');modeButton.type='button';modeButton.id='yard-mode';modeButton.textContent='2D карта';
+  toolbar.querySelector('.map-tools-row').prepend(modeButton);
   function switchMode(){
     active=!active;host.hidden=!active;map.hidden=active;modeButton.textContent=active?'2D карта':'3D терминал';
     for(const option of objectMenu.options){if(equipment.has(option.value))option.hidden=option.disabled=!active;}
@@ -1065,7 +1273,7 @@ function startLiveYard(){
     'held-view':()=>{pitch=.98;focus('held',950,1200,1100,$('held-view').textContent);},
     'fleet-view':()=>follow(state.current?.truck_id??[...fleet.keys()].at(-1)),
     'interior-view':()=>object('building'),
-    'map-zoom-reset':()=>{pitch=1.02;yaw=.04;focus('overview',20,725,Math.max(3000,4900/camera.aspect),'Жалпы көрініс');},
+    'map-zoom-reset':()=>overview(),
     'map-zoom-in':()=>{targetRange=Math.max(85,targetRange/1.4);dirty=true;},
     'map-zoom-out':()=>{targetRange=Math.min(5800,targetRange*1.4);dirty=true;}
   };
@@ -1087,9 +1295,12 @@ function startLiveYard(){
   new ResizeObserver(resize).observe(host);resize();targetRange=range=Math.max(3000,4900/camera.aspect);
   new IntersectionObserver(entries=>{visible=entries[0].isIntersecting;dirty=true;}).observe(host);
   function sync(){
-    const play=$('yard-play'),step=$('yard-step');const playLabel=$('play').textContent;
-    if(play.textContent!==playLabel)play.textContent=playLabel;
-    play.disabled=$('play').disabled;step.disabled=$('step').disabled;
+    if(drawnExitRoute !== exitRoute){
+      drawnExitRoute = exitRoute;
+      setRouteMesh(routeMesh, $("exit-route-line"), 6);
+      setRouteMesh(closedMesh, $("exit-road-closed"), 7, true);
+      dirty = true;
+    }
     for(const [id,f] of fleet)if(!vehicleNodes.has(id)){scene.remove(f.model,f.hit);f.hit.material.dispose();pickables.splice(pickables.indexOf(f.hit),1);fleet.delete(id);dirty=true;}
     for(const [id,n] of vehicleNodes){
       let f=fleet.get(id);
@@ -1101,7 +1312,11 @@ function startLiveYard(){
       f.hit.position.set(p.x,15,p.y);f.hit.rotation.y=f.model.rotation.y;
       if(watch===id&&shown){goal.set(p.x,12,p.y);label.textContent=n.title;}
     }
-    if(watch!==null&&(!fleet.get(watch)?.model.visible)){if(!vehicleNodes.has(watch)||vehicleNodes.get(watch)?._position?.x>1645){watch=null;label.textContent='Көлік терминалдан шықты';}}
+    if(watch !== null && !fleet.get(watch)?.model.visible){
+      const followed = vehicleNodes.get(watch);
+      if(!followed) overview();
+      else if(followed._position?.x >= 1645) overview(`Көлік №${String(watch).padStart(3, "0")} шықты · Жалпы көрініс`);
+    }
   }
   function loop(now){
     if(!active)return;frame=requestAnimationFrame(loop);if(!visible||document.hidden||now-last<32)return;last=now;
